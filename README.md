@@ -2,6 +2,8 @@
 
 **简体中文** | [English](README.en.md)
 
+[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
+
 基于ShowJCR仓库数据的Model Context Protocol (MCP) 服务器，为大语言模型提供最新的期刊分区表查询功能。
 
 ![在 Claude 中使用 jcr-partition MCP 查询期刊分区示例](assets/screenshot.png)

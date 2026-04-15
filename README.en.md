@@ -2,6 +2,8 @@
 
 [简体中文](README.md) | **English**
 
+[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
+
 A Model Context Protocol (MCP) server built on top of data from the ShowJCR repository. It lets any LLM query the latest journal partition / impact factor / warning-list information.
 
 ![Using jcr-partition MCP in Claude to inspect journal partitions](assets/screenshot.png)
