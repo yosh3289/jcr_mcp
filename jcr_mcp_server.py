@@ -1,6 +1,7 @@
 import asyncio
 import sqlite3
 import os
+import sys
 import json
 from typing import Optional, Dict, List, Any
 from dataclasses import dataclass
@@ -11,7 +12,8 @@ from mcp.server.fastmcp import FastMCP
 from mcp.server.fastmcp import Context
 
 # 配置常量
-DATABASE_PATH = "jcr.db"
+# 用相对 __file__ 的绝对路径，避免 MCP 客户端从其他 cwd 启动服务器时找不到 DB
+DATABASE_PATH = str(Path(__file__).parent / "jcr.db")
 DATA_UPDATE_URL = "https://raw.githubusercontent.com/hitfyd/ShowJCR/master/中科院分区表及JCR原始数据文件/"
 
 @dataclass
@@ -82,39 +84,108 @@ class JCRDatabase:
         return results
     
     def _parse_journal_info(self, row_dict: Dict, table_name: str) -> Optional[JournalInfo]:
-        """解析数据库行为期刊信息对象"""
+        """解析数据库行为期刊信息对象
+
+        注意分支顺序：更具体的表名前缀（XRConferences / FQBJCR / CCFT）必须
+        在通用前缀（XR / JCR / CCF）之前匹配，否则会被误归类。
+        """
+        def _clean(val):
+            if val is None:
+                return None
+            s = str(val).strip()
+            if s == '' or s.lower() == 'nan':
+                return None
+            return s
+
+        def _is_top(val):
+            """统一各表的 Top 标志位：XR 用 'Top'/空，FQBJCR 用 '是'/'否'，归一为布尔"""
+            v = _clean(val)
+            return v is not None and v in ('Top', '是', 'Yes', 'yes', 'True', 'true', 'TRUE')
+
         try:
             journal_name = row_dict.get('Journal', '')
-            
-            # 根据表名判断数据类型和年份
+
             impact_factor = None
             partition = None
             category = None
             warning_status = None
             ccf_level = None
             year = None
-            
-            # 解析年份
-            if 'JCR' in table_name:
-                year = table_name.replace('JCR', '')
-                impact_factor = row_dict.get('IF', row_dict.get('Impact Factor'))
-                partition = row_dict.get('Quartile', row_dict.get('分区'))
-                category = row_dict.get('Category', row_dict.get('类别'))
-            
-            elif 'FQBJCR' in table_name:
+
+            # 新锐期刊分区表 2026 的会议论文集子表（XR2026Conferences）
+            if table_name.startswith('XR') and 'Conferences' in table_name:
+                digits = ''.join(ch for ch in table_name if ch.isdigit())
+                year = digits or None
+                partition = _clean(row_dict.get('分区'))
+                if partition and _is_top(row_dict.get('Top')):
+                    partition = f"{partition}（Top）"
+                abbrev = _clean(row_dict.get('会议缩写'))
+                category = f"会议论文集（{abbrev}）" if abbrev else '会议论文集'
+
+            # 新锐期刊分区表（XR2026 等）——含内嵌预警
+            # 注意 XR 表的真实列名是「大类新锐分区」「预警标记」，与 FQBJCR 的「大类分区」不同
+            elif table_name.startswith('XR'):
+                year = table_name.replace('XR', '')
+                partition = _clean(row_dict.get('大类新锐分区'))
+                if partition and _is_top(row_dict.get('Top')):
+                    partition = f"{partition}（Top）"
+                category = _clean(row_dict.get('大类中文名')) or _clean(row_dict.get('大类英文名'))
+                warning_status = _clean(row_dict.get('预警标记'))
+
+            # 中科院分区表升级版（必须在 JCR 分支之前——'JCR' 是 'FQBJCR' 的子串）
+            elif table_name.startswith('FQBJCR'):
                 year = table_name.replace('FQBJCR', '')
-                partition = row_dict.get('大类分区', row_dict.get('Partition'))
-                category = row_dict.get('学科', row_dict.get('Subject'))
-            
-            elif 'GJQKYJMD' in table_name:
+                partition = _clean(row_dict.get('大类分区')) or _clean(row_dict.get('Partition'))
+                if partition and _is_top(row_dict.get('Top')):
+                    partition = f"{partition}（Top）"
+                category = (_clean(row_dict.get('大类'))
+                            or _clean(row_dict.get('领域'))
+                            or _clean(row_dict.get('学科'))
+                            or _clean(row_dict.get('Subject')))
+
+            # JCR 影响因子（列名带年份后缀，如 IF(2024) / IF Quartile(2024)）
+            # JCR2023 的 IF 列名实际是 ' IF(2023)'（带前导空格），故对列名做去空格归一化查找
+            elif table_name.startswith('JCR'):
+                year = table_name.replace('JCR', '')
+                norm = {k.replace(' ', ''): v for k, v in row_dict.items() if isinstance(k, str)}
+                impact_factor = (_clean(norm.get(f'IF({year})'))
+                                 or _clean(row_dict.get('IF'))
+                                 or _clean(row_dict.get('Impact Factor')))
+                partition = (_clean(norm.get(f'IFQuartile({year})'))
+                             or _clean(row_dict.get('Quartile'))
+                             or _clean(row_dict.get('分区')))
+                category = _clean(row_dict.get('Category')) or _clean(row_dict.get('类别'))
+
+            # 国际期刊预警名单（列名按年份变化：预警等级（YYYY年） / 预警原因YYYY年）
+            elif table_name.startswith('GJQKYJMD'):
                 year = table_name.replace('GJQKYJMD', '')
-                warning_status = row_dict.get('预警等级', row_dict.get('Warning Level'))
-            
-            elif 'CCF' in table_name:
+                # 取第二列（Journal 之外首个非空值）作为预警信息，兼容各年列名
+                for k, v in row_dict.items():
+                    if k == 'Journal':
+                        continue
+                    cleaned = _clean(v)
+                    if cleaned:
+                        warning_status = cleaned
+                        break
+
+            # 计算领域高质量科技期刊分级目录（必须在 CCF 分支之前）
+            elif table_name.startswith('CCFT'):
+                year = table_name.replace('CCFT', '')
+                t_rank = _clean(row_dict.get('T分区'))
+                ccf_level = f"{t_rank}（计算领域高质量科技期刊）" if t_rank else None
+                category = _clean(row_dict.get('领域')) or '计算领域高质量科技期刊'
+
+            # CCF 推荐国际学术会议和期刊目录
+            elif table_name.startswith('CCF'):
                 year = table_name.replace('CCF', '')
-                ccf_level = row_dict.get('CCF推荐类型', row_dict.get('CCF Level'))
-                category = row_dict.get('领域', row_dict.get('Field'))
-            
+                ccf_type = _clean(row_dict.get('CCF推荐类型')) or _clean(row_dict.get('CCF Level'))
+                ccf_cat = _clean(row_dict.get('CCF推荐类别（国际学术刊物/会议）'))
+                if ccf_type and ccf_cat:
+                    ccf_level = f"{ccf_type}（{ccf_cat}）"
+                else:
+                    ccf_level = ccf_type
+                category = _clean(row_dict.get('领域')) or _clean(row_dict.get('Field'))
+
             return JournalInfo(
                 journal_name=journal_name,
                 impact_factor=impact_factor,
@@ -124,7 +195,7 @@ class JCRDatabase:
                 ccf_level=ccf_level,
                 year=year
             )
-        
+
         except Exception:
             return None
 
@@ -247,57 +318,104 @@ async def get_partition_trends(journal_name: str) -> str:
 async def check_warning_journals(keywords: Optional[str] = None) -> str:
     """
     查询国际期刊预警名单
-    
+
+    覆盖两类数据源：
+      1. 传统 GJQKYJMD 预警表（2020/2021/2023/2024/2025）
+      2. 新锐期刊分区表 XR*（自 2026 起预警信息以"预警标记"字段内嵌，典型值 "Under Review"）
+
     Args:
         keywords: 关键词（可选，用于筛选特定期刊）
-    
+
     Returns:
         预警期刊列表及其预警原因
     """
     try:
         conn = sqlite3.connect(db.db_path)
         cursor = conn.cursor()
-        
-        # 获取预警表
-        cursor.execute("SELECT name FROM sqlite_master WHERE type='table' AND name LIKE 'GJQKYJMD%'")
-        warning_tables = [table[0] for table in cursor.fetchall()]
-        
-        if not warning_tables:
-            return "未找到预警期刊数据表"
-        
+
         output = ["🚨 国际期刊预警名单查询结果"]
         output.append("=" * 40)
-        
+
+        # --- 1) 传统 GJQKYJMD 预警表 ---
+        cursor.execute("SELECT name FROM sqlite_master WHERE type='table' AND name LIKE 'GJQKYJMD%'")
+        warning_tables = [t[0] for t in cursor.fetchall()]
+
         for table in sorted(warning_tables, reverse=True):
             year = table.replace('GJQKYJMD', '')
             output.append(f"\n📅 {year}年预警名单:")
-            
+
             query = f"SELECT * FROM {table}"
             params = []
-            
             if keywords:
                 query += " WHERE Journal LIKE ? COLLATE NOCASE"
                 params.append(f"%{keywords}%")
-            
+
             cursor.execute(query, params)
             rows = cursor.fetchall()
             column_names = [description[0] for description in cursor.description]
-            
+
             if rows:
                 for row in rows:
                     row_dict = dict(zip(column_names, row))
                     journal_name = row_dict.get('Journal', '未知期刊')
-                    warning_reason = row_dict.get('预警原因', row_dict.get('预警等级', '未知原因'))
-                    output.append(f"  • {journal_name}: {warning_reason}")
+                    # 各年份的预警列名不一致（预警等级（YYYY年） / 预警原因YYYY年），
+                    # 取 Journal 之外第一个非空字段作为原因
+                    reason = '未知原因'
+                    for k, v in row_dict.items():
+                        if k == 'Journal':
+                            continue
+                        if v is not None and str(v).strip() and str(v).strip().lower() != 'nan':
+                            reason = str(v).strip()
+                            break
+                    output.append(f"  • {journal_name}: {reason}")
             else:
                 if keywords:
                     output.append(f"  无匹配 '{keywords}' 的预警期刊")
                 else:
                     output.append("  该年度无预警期刊数据")
-        
+
+        # --- 2) XR 新锐期刊分区表（非 Conferences 子表） ---
+        cursor.execute(
+            "SELECT name FROM sqlite_master WHERE type='table' "
+            "AND name LIKE 'XR%' AND name NOT LIKE '%Conferences'"
+        )
+        xr_tables = [t[0] for t in cursor.fetchall()]
+
+        for table in sorted(xr_tables, reverse=True):
+            year = table.replace('XR', '')
+            output.append(f"\n📅 {year}年预警期刊（新锐分区表内嵌）:")
+
+            # XR 表中预警字段名为「预警标记」（典型值如 "Under Review"）
+            query = (
+                f'SELECT Journal, "预警标记" FROM {table} '
+                f'WHERE "预警标记" IS NOT NULL AND TRIM("预警标记") <> \'\''
+            )
+            params = []
+            if keywords:
+                query += ' AND Journal LIKE ? COLLATE NOCASE'
+                params.append(f"%{keywords}%")
+
+            try:
+                cursor.execute(query, params)
+                rows = cursor.fetchall()
+                if rows:
+                    for journal, reason in rows:
+                        output.append(f"  • {journal}: {reason}")
+                else:
+                    if keywords:
+                        output.append(f"  无匹配 '{keywords}' 的预警期刊")
+                    else:
+                        output.append("  该年度无预警期刊")
+            except sqlite3.Error as e:
+                output.append(f"  查询失败: {e}")
+
+        if not warning_tables and not xr_tables:
+            conn.close()
+            return "未找到预警期刊数据表"
+
         conn.close()
         return "\n".join(output)
-    
+
     except Exception as e:
         return f"查询预警期刊出错: {str(e)}"
 
@@ -420,16 +538,24 @@ async def journal_analysis_prompt(journal_name: str) -> str:
 """
 
 if __name__ == "__main__":
-    # 运行MCP服务器
-    print("🚀 启动JCR分区表MCP服务器...")
-    print(f"📊 数据库路径: {DATABASE_PATH}")
-    print("🔧 可用工具:")
-    print("  • search_journal - 搜索期刊信息")
-    print("  • get_partition_trends - 获取分区趋势")
-    print("  • check_warning_journals - 查询预警期刊")
-    print("  • compare_journals - 对比期刊")
-    print("💡 提示词模板: journal_analysis_prompt")
-    print("📋 资源: jcr://database-info")
-    print("\n⚡ 服务器启动中...")
-    
+    # MCP stdio 模式下，stdout 必须保留给 JSON-RPC 通信。
+    # 任何启动日志都必须写到 stderr，否则会污染协议流导致客户端断开。
+    # Windows 默认 stderr 编码是 GBK/cp936，打 emoji 会抛 UnicodeEncodeError，
+    # 所以这里强制切到 UTF-8。
+    try:
+        sys.stderr.reconfigure(encoding='utf-8')
+    except Exception:
+        pass
+
+    print("🚀 启动JCR分区表MCP服务器...", file=sys.stderr)
+    print(f"📊 数据库路径: {DATABASE_PATH}", file=sys.stderr)
+    print("🔧 可用工具:", file=sys.stderr)
+    print("  • search_journal - 搜索期刊信息", file=sys.stderr)
+    print("  • get_partition_trends - 获取分区趋势", file=sys.stderr)
+    print("  • check_warning_journals - 查询预警期刊", file=sys.stderr)
+    print("  • compare_journals - 对比期刊", file=sys.stderr)
+    print("💡 提示词模板: journal_analysis_prompt", file=sys.stderr)
+    print("📋 资源: jcr://database-info", file=sys.stderr)
+    print("\n⚡ 服务器启动中...", file=sys.stderr)
+
     app.run(transport="stdio") 

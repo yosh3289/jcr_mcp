@@ -1,10 +1,10 @@
 {
   "mcpServers": {
     "jcr-partition": {
-      "command": "python",
-      "args": ["jcr_mcp_server.py"],
-      "cwd": "/path/to/your/jcr-mcp-server",
+      "command": "/path/to/python",
+      "args": ["/path/to/jcr_mcp_server.py"],
+      "cwd": "/path/to/jcr_mcp",
       "env": {}
     }
   }
-} 
+}

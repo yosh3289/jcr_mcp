@@ -1,6 +1,10 @@
 # JCR分区表MCP服务器
 
+**简体中文** | [English](README.en.md)
+
 基于ShowJCR仓库数据的Model Context Protocol (MCP) 服务器，为大语言模型提供最新的期刊分区表查询功能。
+
+![在 Claude 中使用 jcr-partition MCP 查询期刊分区示例](assets/screenshot.png)
 
 ## 功能特性
 
@@ -20,17 +24,20 @@
 
 本项目基于 [ShowJCR](https://github.com/hitfyd/ShowJCR) 仓库的数据，包括：
 
+- **新锐期刊分区表** (2026年版，22299 种期刊 + 15 种计算机领域重要会议；自该版起预警信息以「预警标记: Under Review」内嵌)
 - **中科院分区表升级版** (2025、2023、2022年)
 - **JCR期刊影响因子** (2024、2023、2022年)
-- **国际期刊预警名单** (2025、2024、2023、2021、2020年)
-- **CCF推荐国际学术期刊目录** (2022年)
-- **计算领域高质量科技期刊分级目录** (2022年)
+- **国际期刊预警名单** (2025、2024、2023、2021、2020年；上游自 2026 起不再单独发布)
+- **CCF推荐国际学术会议和期刊目录** (2026、2022年)
+- **计算领域高质量科技期刊分级目录** (2025、2022年)
+
+> 2026 版本说明：`check_warning_journals` 工具会同时扫描传统 `GJQKYJMD*` 预警表与 `XR2026.预警标记` 字段，覆盖新旧两套预警来源。
 
 ## 安装部署
 
 ### 1. 环境要求
-- Python 3.8+
-- SQLite3
+- Python **3.10+**（`mcp` SDK 的硬性要求）
+- SQLite3（通常随 Python 内置）
 
 ### 2. 安装依赖
 ```bash
@@ -61,20 +68,33 @@ python test_client.py
 - 模式1：自动测试所有功能
 - 模式2：交互式查询模式
 
-### Claude Desktop集成
+### Claude Desktop 集成
 
-在Claude Desktop配置文件中添加：
+在 Claude Desktop 配置文件（`%APPDATA%\Claude\claude_desktop_config.json` 或 macOS 的 `~/Library/Application Support/Claude/claude_desktop_config.json`）中添加：
+
 ```json
 {
   "mcpServers": {
     "jcr-partition": {
-      "command": "python",
-      "args": ["path/to/jcr_mcp_server.py"],
-      "cwd": "path/to/project"
+      "command": "/path/to/python",
+      "args": ["/path/to/jcr_mcp_server.py"],
+      "cwd": "/path/to/project"
     }
   }
 }
 ```
+
+仓库里的 `claude_desktop_config.json` 可作参考模板。
+
+### Claude Code 集成
+
+使用 CLI 一行注册（作用域 `user` 代表全局可用）：
+
+```bash
+claude mcp add -s user jcr-partition -- /path/to/python /path/to/jcr_mcp_server.py
+```
+
+注册后可通过 `claude mcp list` 确认状态，应显示 `✓ Connected`。
 
 ## 使用示例
 
@@ -116,13 +136,17 @@ result = await session.call_tool("check_warning_journals", {
 ```
 📚 期刊名称: NATURE
 
-【2024年】
-  📊 影响因子: 64.8
+【2024年】（JCR）
+  📊 影响因子: 48.5
   🏆 分区: Q1
-  📖 学科类别: Multidisciplinary Sciences
+  📖 学科类别: MULTIDISCIPLINARY SCIENCES(SCIE)
 
-【2025年】
-  🏆 分区: 1区
+【2025年】（中科院升级版）
+  🏆 分区: 1 [1/118]（Top）
+  📖 学科类别: 综合性期刊
+
+【2026年】（新锐期刊分区表）
+  🏆 分区: 1 区（Top）
   📖 学科类别: 综合性期刊
 ```
 

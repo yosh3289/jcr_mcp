@@ -33,34 +33,47 @@ class DataSyncer:
         self.base_url = "https://raw.githubusercontent.com/hitfyd/ShowJCR/master/"
         self.data_folder = "中科院分区表及JCR原始数据文件"
         
-        # 数据源配置
+        # 数据源配置（上游文件命名已统一为 <表名>-UTF8.csv，GJQKYJMD 保留 .csv）
         self.data_sources = {
-            # JCR数据
-            "JCR2024": "JCR2024.csv",
-            "JCR2023": "JCR2023.csv", 
-            "JCR2022": "JCR2022.csv",
-            
-            # 中科院分区表
-            "FQBJCR2025": "2025年中科院升级版.csv",
-            "FQBJCR2023": "2023年中科院升级版.csv",
-            "FQBJCR2022": "2022年中科院升级版.csv",
-            
-            # 国际期刊预警名单
-            "GJQKYJMD2025": "国际期刊预警名单2025.csv",
-            "GJQKYJMD2024": "国际期刊预警名单2024.csv",
-            "GJQKYJMD2023": "国际期刊预警名单2023.csv",
-            "GJQKYJMD2021": "国际期刊预警名单2021.csv",
-            "GJQKYJMD2020": "国际期刊预警名单2020.csv",
-            
-            # CCF推荐
-            "CCF2022": "CCF推荐国际学术期刊目录2022.csv",
-            "CCFT2022": "计算领域高质量科技期刊分级目录2022.csv"
+            # JCR 期刊影响因子
+            "JCR2024": "JCR2024-UTF8.csv",
+            "JCR2023": "JCR2023-UTF8.csv",
+            "JCR2022": "JCR2022-UTF8.csv",
+
+            # 中科院分区表升级版
+            "FQBJCR2025": "FQBJCR2025-UTF8.csv",
+            "FQBJCR2023": "FQBJCR2023-UTF8.csv",
+            "FQBJCR2022": "FQBJCR2022-UTF8.csv",
+
+            # 国际期刊预警名单（自 2026 起上游不再单独发布，预警信息内嵌于 XR2026.预警原因）
+            "GJQKYJMD2025": "GJQKYJMD2025.csv",
+            "GJQKYJMD2024": "GJQKYJMD2024.csv",
+            "GJQKYJMD2023": "GJQKYJMD2023.csv",
+            "GJQKYJMD2021": "GJQKYJMD2021.csv",
+            "GJQKYJMD2020": "GJQKYJMD2020.csv",
+
+            # 新锐期刊分区表 2026（xr-scholar.com 源，含内嵌预警）
+            "XR2026": "XR2026-UTF8.csv",
+            "XR2026Conferences": "XR2026Conferences-UTF8.csv",
+
+            # CCF 推荐国际学术会议和期刊目录
+            "CCF2026": "CCF2026-UTF8.csv",
+            "CCF2022": "CCF2022-UTF8.csv",
+
+            # 计算领域高质量科技期刊分级目录
+            "CCFT2025": "CCFT2025-UTF8.csv",
+            "CCFT2022": "CCFT2022-UTF8.csv",
         }
     
     async def download_file(self, url: str, local_path: str) -> bool:
-        """下载文件"""
+        """下载文件
+
+        注意：trust_env=False 跳过 httpx 对系统代理的自动探测——
+        某些 Windows/代理环境下 CONNECT 隧道 SSL 握手会失败（报空的 ConnectError）。
+        如果你所在网络必须走代理才能访问 GitHub，请显式传 proxies 参数或改用其他下载方式。
+        """
         try:
-            async with httpx.AsyncClient(timeout=30.0) as client:
+            async with httpx.AsyncClient(timeout=30.0, trust_env=False) as client:
                 logger.info(f"正在下载: {url}")
                 response = await client.get(url)
                 response.raise_for_status()
@@ -107,8 +120,8 @@ class DataSyncer:
             
             # 读取CSV文件
             try:
-                # 尝试不同的编码
-                for encoding in ['utf-8', 'gbk', 'gb2312', 'utf-8-sig']:
+                # utf-8-sig 优先：自动剥离 BOM，避免首列名被解析成 '\ufeffJournal'
+                for encoding in ['utf-8-sig', 'utf-8', 'gbk', 'gb2312']:
                     try:
                         df = pd.read_csv(csv_path, encoding=encoding)
                         logger.info(f"使用编码 {encoding} 成功读取文件")

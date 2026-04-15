@@ -1,0 +1,28 @@
+# 本地生成的数据库（~21MB，用户应各自跑 data_sync.py 生成）
+jcr.db
+jcr.db-journal
+jcr.db-wal
+jcr.db-shm
+
+# 数据同步日志
+data_sync.log
+
+# 临时下载目录
+temp_data/
+
+# Python 运行产物
+__pycache__/
+*.py[cod]
+*$py.class
+*.egg-info/
+
+# 虚拟环境
+.venv/
+venv/
+env/
+
+# 编辑器 / 系统
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db
