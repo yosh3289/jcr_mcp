@@ -8,8 +8,18 @@ from dataclasses import dataclass
 import httpx
 from pathlib import Path
 
-from mcp.server.fastmcp import FastMCP
-from mcp.server.fastmcp import Context
+# Compatibility shim for mcp>=2.0.0, where `mcp.server.fastmcp` was removed
+# and `FastMCP` was renamed to `MCPServer` under `mcp.server.mcpserver`.
+try:
+    from mcp.server.fastmcp import FastMCP, Context  # mcp<2.0
+except (ImportError, ModuleNotFoundError):  # mcp>=2.0
+    from mcp.server.mcpserver import MCPServer as _MCPServer, Context
+
+    class FastMCP(_MCPServer):
+        def __init__(self, name: str = None, **kwargs):
+            # En mcp>=2.0 MCPServer no acepta 'port' en __init__
+            kwargs.pop("port", None)
+            super().__init__(name, **kwargs)
 
 # 配置常量
 # 用相对 __file__ 的绝对路径，避免 MCP 客户端从其他 cwd 启动服务器时找不到 DB
